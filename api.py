@@ -381,26 +381,40 @@ class Task_list:
     def _select_task(self):
         if self.list.__len__() == 0:
             print('队列无任务')
-            return -1
+            return ERR_CODE
         task = self.list.pop(0)
         return task
 
+    # 选择指定的任务
+    def _select_task_specify(self, task_id):
+        for index in range(len(self.list)):
+            if self.list[index].task_id == task_id:
+                task = self.list.pop(index)
+                return task
+        print('_select_task_specify error, doesn\'t exist this task_id')
+        return ERR_CODE
     # 查询两个位置间的距离
     def _find_distance(self, source: int, destination: int):
         # 注意参数传入int而不是枚举
         return Distance[source][destination]
 
     # 处理一项任务
-    def process_task(self, agv_list):
-        # 选择一项任务来处理
-        task = self._select_task()
-        if task == -1:
+    def process_task(self, agv_list, task_id):
+        task = ''
+        if task_id == None or task_id == -1:
+            # 选择一项任务来处理
+            task = self._select_task()
+        else:
+            task = self._select_task_specify(task_id)
+        if task == ERR_CODE:
             return {
                 'task': -1,
                 'agv_id': -1,
                 'process_time': -1,
                 'error': '任务队列错误'
             }
+
+        # 如果卡板数量大于1
 
         # 选择一辆合适的agv车
         agv, distance_to_source = agv_list.select_agv(task.source, task.task_id)
@@ -429,6 +443,7 @@ class Task_list:
         }
 
         return result
+
 
     def print_task_list(self):
         for task in self.list:
@@ -548,7 +563,8 @@ result = {
 
 def loop_update_status():
     # 连接redis
-    cache = redis.StrictRedis('127.0.0.1', 6379)
+    # cache = redis.StrictRedis('127.0.0.1', 6379)
+    global cache
     # ##初始化
     task_list = Task_list()
     agv_list = Agv_list()
@@ -580,16 +596,16 @@ def loop_update_status():
 
         count += 1
 
-        # 处理任务的间隔时间（单位：次更新状态的时间）
-        interval_time_process_task = 5
-        if count % interval_time_process_task == 0:
-            # print(f"outside{temp}")
-            print(f'该处理任务了,当前任务队列长度{task_list.list.__len__()}')
-
-            print(task_list)
-            task_list.process_task(agv_list)
-
-            agv_list.print_agv_list()
+        # # 处理任务的间隔时间（单位：次更新状态的时间）
+        # interval_time_process_task = 5
+        # if count % interval_time_process_task == 0:
+        #     # print(f"outside{temp}")
+        #     print(f'该处理任务了,当前任务队列长度{task_list.list.__len__()}')
+        #
+        #     print(task_list)
+        #     task_list.process_task(agv_list, -1)  # -1代表根据算法选择一个任务
+        #
+        #     agv_list.print_agv_list()
 
         # 将维护完毕的数据写入cache中
         cache.set('agv_list', str(agv_list.get_dict()))
@@ -625,9 +641,13 @@ def add_task(data: Optional[str] = Body(None)):
     lock.acquire()
     # 从redis读取任务列表
     task_list_info = eval(cache.get('task_list'))
+    agv_list_info = eval(cache.get('agv_list'))
+
     print('读到的信息：',task_list_info)
     task_list = Task_list()
     task_list.update_list_info(task_list_info)
+    agv_list = Agv_list()
+    agv_list.update_list_info(agv_list_info)
     task_list.add_task(task_id=data['task_id'], source=data['source'],
                        destination=data['destination'], material_id=data['material_id'],
                        material_number=data['material_number'])
@@ -635,14 +655,15 @@ def add_task(data: Optional[str] = Body(None)):
     print(f'收到请求，task_list 长度:{task_list.list.__len__()}, add:{task_list}')
 
     # 写回redis中
-    cache.set('task_list', str(task_list.get_dict()))
     print('处理后的信息：',str(task_list.get_dict()))
+    result = task_list.process_task(agv_list, data['task_id'])
+
+    cache.set('task_list', str(task_list.get_dict()))
+    cache.set('agv_list', str(agv_list.get_dict()))
+
     lock.release()
 
-    # global temp
-    # temp += 1
-    # print(f" ...{temp}")
-    return {'status': '200'}
+    return result
 
 # 连接redis
 cache = redis.StrictRedis('127.0.0.1', 6379)
